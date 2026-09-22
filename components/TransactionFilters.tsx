@@ -48,6 +48,7 @@ export function TransactionFilters({
     current.to,
     current.minAmount,
     current.maxAmount,
+    current.needsTransferReview,
   ].filter(Boolean).length;
 
   const clearAll = () => {
@@ -250,6 +251,20 @@ export function TransactionFilters({
               />
             </div>
           </Field>
+
+          <div className="col-span-2 lg:col-span-4">
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={Boolean(current.needsTransferReview)}
+                onChange={(e) => set({ needsTransfer: e.target.checked ? "1" : null })}
+              />
+              Needs transfer review
+              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                — imported rows that look like money moved between your own accounts
+              </span>
+            </label>
+          </div>
 
           {activeCount > 0 && (
             <div className="col-span-2 lg:col-span-4 flex justify-end">

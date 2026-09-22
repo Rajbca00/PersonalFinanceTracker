@@ -100,13 +100,15 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
       const fromRules = ref.categories.find((c) => c.name === s.categoryName);
       let category = fromFile ?? fromRules ?? null;
 
-      // A transfer moves money between the user's own accounts. A CSV only
-      // ever shows one side, so importing it as a plain expense would
-      // double-count against the card purchases already recorded. Flag the row
-      // and leave it unticked rather than quietly getting the totals wrong.
+      // A transfer moves money between the user's own accounts, and a CSV only
+      // ever shows one side. It still has to be imported: the money really did
+      // leave this account, so skipping the row would leave the balance wrong.
+      // It comes in as an ordinary expense/income — which gives the correct
+      // balance — keeps its transfer-kind category so it stays findable, and
+      // is marked unreviewed. "Convert to transfer" then fixes the spending
+      // total by matching it to the other leg.
       const looksLikeTransfer =
         inferType(r.direction, category?.name ?? s.categoryName, ref.categories) === "transfer";
-      if (looksLikeTransfer && category?.kind === "transfer") category = null;
 
       const bucket = ref.buckets.find((b) => b.name === s.bucketName) ?? defaultBucket;
       const duplicateOf = seen.get(`${r.date}|${r.amount.toFixed(2)}`) ?? null;
@@ -123,10 +125,10 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
         bucket_id: bucket.id,
         event_id: null,
         note: "",
-        // Likely duplicates and likely transfers start unticked. Re-importing
-        // the same statement is an easy mistake and silently doubles a month's
-        // spending, so bringing a flagged row in is a deliberate act.
-        include: !looksLikeTransfer && !duplicateOf,
+        // Only duplicates start unticked. Re-importing the same statement is
+        // an easy mistake that silently doubles a month's spending, so
+        // bringing one in is a deliberate act.
+        include: !duplicateOf,
         duplicateOf,
         looksLikeTransfer,
         confidence: fromFile ? 0.95 : s.confidence,

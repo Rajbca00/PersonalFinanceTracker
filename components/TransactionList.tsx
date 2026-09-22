@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { bulkApply, deleteTransaction, patchTransaction, type BulkAction } from "@/lib/actions";
+import { convertToTransfer, unlinkTransfer } from "@/lib/transfer-actions";
+import { ConvertToTransfer } from "./ConvertToTransfer";
 import { formatDayShort, formatINR } from "@/lib/format";
 import type { RefData, TransactionRow, TxnType } from "@/lib/types";
 import { ConfirmDialog, Sheet } from "./Sheet";
@@ -32,6 +34,8 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [deleting, setDeleting] = useState<TransactionRow | null>(null);
   const [detail, setDetail] = useState<TransactionRow | null>(null);
+  const [converting, setConverting] = useState<TransactionRow | null>(null);
+  const [unlinking, setUnlinking] = useState<TransactionRow | null>(null);
   const [busy, startTransition] = useTransition();
 
   // Server is the source of truth; re-sync whenever it sends new rows.
@@ -153,7 +157,14 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
                     value={r.category_id ?? ""}
                     placeholder="Uncategorized"
                     options={refData.categories
-                      .filter((c) => (r.type === "transfer" ? c.kind === "transfer" : c.kind === r.type))
+                      .filter(
+                        (c) =>
+                          // keep whatever is already set, even if its kind no
+                          // longer matches — an imported card payment is an
+                          // expense carrying a transfer category until converted
+                          c.id === r.category_id ||
+                          (r.type === "transfer" ? c.kind === "transfer" : c.kind === r.type)
+                      )
                       .map((c) => ({ value: c.id, label: c.name }))}
                     onChange={(v) =>
                       save(
@@ -213,6 +224,25 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
 
                 <td className="px-2 py-1.5">
                   <div className="flex items-center justify-end gap-0.5">
+                    {r.type === "transfer" ? (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setUnlinking(r)}
+                        aria-label="Turn this transfer back into a normal transaction"
+                        title="Not a transfer"
+                      >
+                        <IconSwap size={14} />
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setConverting(r)}
+                        aria-label="Convert to transfer"
+                        title="Convert to transfer"
+                      >
+                        <IconSwap size={14} />
+                      </button>
+                    )}
                     <button
                       className="btn btn-ghost btn-sm"
                       onClick={() => setEditing(r)}
@@ -311,6 +341,22 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
           refData={refData}
           busy={busy}
           onClear={() => setSelected(new Set())}
+          /* Linking needs exactly two rows: one leg out, one leg in. */
+          onLinkPair={
+            selected.size === 2
+              ? () => {
+                  const [a, b] = [...selected];
+                  startTransition(async () => {
+                    const res = await convertToTransfer(a, { mergeWithId: b });
+                    if (!res.ok) alert(res.error);
+                    else {
+                      setSelected(new Set());
+                      router.refresh();
+                    }
+                  });
+                }
+              : undefined
+          }
           onApply={(action) =>
             startTransition(async () => {
               const res = await bulkApply([...selected], action);
@@ -342,6 +388,39 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
           setDetail(null);
           setDeleting(r);
         }}
+        onConvert={(r) => {
+          setDetail(null);
+          if (r.type === "transfer") setUnlinking(r);
+          else setConverting(r);
+        }}
+      />
+
+      <ConvertToTransfer
+        row={converting}
+        refData={refData}
+        onClose={() => setConverting(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(unlinking)}
+        title="Not a transfer?"
+        message={
+          unlinking
+            ? `This will turn it back into an expense on ${unlinking.source_name}. If it was merged with a row from another account, that row is already gone and will not come back.`
+            : ""
+        }
+        confirmLabel="Make it an expense"
+        busy={busy}
+        onCancel={() => setUnlinking(null)}
+        onConfirm={() =>
+          startTransition(async () => {
+            if (!unlinking) return;
+            const res = await unlinkTransfer(unlinking.id, "expense");
+            if (!res.ok) alert(res.error);
+            setUnlinking(null);
+            router.refresh();
+          })
+        }
       />
 
       <ConfirmDialog
@@ -538,12 +617,15 @@ function BulkBar({
   refData,
   onApply,
   onClear,
+  onLinkPair,
   busy,
 }: {
   count: number;
   refData: RefData;
   onApply: (a: BulkAction) => void;
   onClear: () => void;
+  /** Only supplied when exactly two rows are selected. */
+  onLinkPair?: () => void;
   busy: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -614,6 +696,18 @@ function BulkBar({
             onPick={(v) => v && onApply({ kind: "type", value: v as TxnType })}
             disabled={busy}
           />
+
+          {onLinkPair && (
+            <button
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={onLinkPair}
+              title="Merge these two rows into one transfer"
+            >
+              <IconSwap size={13} />
+              Link as transfer
+            </button>
+          )}
 
           <button className="btn btn-sm" disabled={busy} onClick={() => setNoteOpen(true)}>
             Note
@@ -741,11 +835,13 @@ function MobileDetail({
   onClose,
   onEdit,
   onDelete,
+  onConvert,
 }: {
   row: TransactionRow | null;
   onClose: () => void;
   onEdit: (r: TransactionRow) => void;
   onDelete: (r: TransactionRow) => void;
+  onConvert: (r: TransactionRow) => void;
 }) {
   if (!row) return null;
 
@@ -770,6 +866,10 @@ function MobileDetail({
           <button className="btn btn-danger" onClick={() => onDelete(row)}>
             <IconTrash size={14} />
             Delete
+          </button>
+          <button className="btn" onClick={() => onConvert(row)}>
+            <IconSwap size={14} />
+            {row.type === "transfer" ? "Not a transfer" : "To transfer"}
           </button>
           <button className="btn btn-primary" onClick={() => onEdit(row)}>
             <IconEdit size={14} />

@@ -32,6 +32,7 @@ function toFilters(sp: SP): TxnFilters {
     cardId: sp.card,
     type: sp.type && TYPES.has(sp.type) ? (sp.type as TxnType) : undefined,
     search: sp.q,
+    needsTransferReview: sp.needsTransfer === "1",
     minAmount: n(sp.min),
     maxAmount: n(sp.max),
     sort: sp.sort && SORTS.has(sp.sort) ? (sp.sort as TxnFilters["sort"]) : "date_desc",

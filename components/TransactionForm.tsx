@@ -63,9 +63,14 @@ export function TransactionForm({
   const categoryOptions = useMemo(
     () =>
       refData.categories.filter(
-        (c) => !c.is_archived && (type === "transfer" ? c.kind === "transfer" : c.kind === type)
+        (c) =>
+          !c.is_archived &&
+          // never hide the category already on the row, or editing would
+          // silently blank it
+          (c.id === editing?.category_id ||
+            (type === "transfer" ? c.kind === "transfer" : c.kind === type))
       ),
-    [refData.categories, type]
+    [refData.categories, type, editing?.category_id]
   );
 
   useEffect(() => {

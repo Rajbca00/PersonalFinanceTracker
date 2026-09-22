@@ -271,12 +271,21 @@ export async function bulkApply(ids: string[], action: BulkAction): Promise<Acti
         break;
       }
       case "type": {
-        // Moving rows out of 'transfer' has to clear the destination, or the
-        // txn_dest_rule check constraint rejects the whole update.
-        patch =
-          action.value === "transfer"
-            ? { type: action.value }
-            : { type: action.value, dest_account_id: null, dest_credit_card_id: null };
+        // A transfer needs a destination, which a bulk edit has no way to
+        // supply — setting type alone would be rejected by txn_dest_rule.
+        // Use "Convert to transfer" on the row instead.
+        if (action.value === "transfer") {
+          throw new Error(
+            'Use "Convert to transfer" on a transaction to set where the money went.'
+          );
+        }
+        // Moving rows out of 'transfer' must clear the destination, or the
+        // same constraint rejects the whole update.
+        patch = {
+          type: action.value,
+          dest_account_id: null,
+          dest_credit_card_id: null,
+        };
         break;
       }
     }

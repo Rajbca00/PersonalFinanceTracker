@@ -108,6 +108,14 @@ function whereFor(f: TxnFilters): { clause: string; params: unknown[] } {
   if (f.eventId) parts.push(`event_id = ${p(f.eventId)}`);
   if (f.type) parts.push(`type = ${p(f.type)}`);
   if (f.reviewed !== undefined) parts.push(`reviewed = ${p(f.reviewed)}`);
+
+  // Rows imported from a statement that look like a movement between the
+  // user's own accounts, but are still counted as spending.
+  if (f.needsTransferReview) {
+    parts.push(
+      `type <> 'transfer' and category_id in (select id from categories where kind = 'transfer')`
+    );
+  }
   if (f.minAmount !== undefined) parts.push(`amount >= ${p(f.minAmount)}`);
   if (f.maxAmount !== undefined) parts.push(`amount <= ${p(f.maxAmount)}`);
 

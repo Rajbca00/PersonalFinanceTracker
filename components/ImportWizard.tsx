@@ -250,9 +250,9 @@ export function ImportWizard({ refData }: { refData: RefData }) {
                 <span>
                   {transfers} row{transfers === 1 ? "" : "s"} look like money moving
                   between your own accounts (a card payment, ATM withdrawal or self
-                  transfer). A statement only shows one side, so importing them as
-                  spending would double-count. They are left unticked &mdash; tick any
-                  you do want as a plain expense.
+                  transfer). They are imported so your balance stays right, but they
+                  will count as spending until you open each one and choose
+                  &ldquo;Convert to transfer&rdquo;.
                 </span>
               </p>
             )}
@@ -285,9 +285,9 @@ export function ImportWizard({ refData }: { refData: RefData }) {
                 <span>
                   {transfers} row{transfers === 1 ? "" : "s"} look like money moving
                   between your own accounts (a card payment, ATM withdrawal or self
-                  transfer). A statement only shows one side, so importing them as
-                  spending would double-count. They are left unticked &mdash; tick any
-                  you do want as a plain expense.
+                  transfer). They are imported so your balance stays right, but they
+                  will count as spending until you open each one and choose
+                  &ldquo;Convert to transfer&rdquo;.
                 </span>
               </p>
             )}

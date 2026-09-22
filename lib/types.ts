@@ -116,6 +116,8 @@ export interface TxnFilters {
   minAmount?: number;
   maxAmount?: number;
   reviewed?: boolean;
+  /** Not a transfer, but carrying a transfer-kind category — needs converting. */
+  needsTransferReview?: boolean;
   sort?: "date_desc" | "date_asc" | "amount_desc" | "amount_asc";
   page?: number;
   pageSize?: number;
