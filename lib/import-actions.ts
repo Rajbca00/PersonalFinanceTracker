@@ -84,9 +84,32 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
 
     const rows: StagedRow[] = normalized.map((r, i) => {
       const s = suggestByRules(r.description, r.direction);
-      const category = ref.categories.find((c) => c.name === s.categoryName) ?? null;
+
+      // The statement's own direction is the source of truth for income vs
+      // expense. It is never overridden by a category guess — that is how an
+      // incoming NEFT credit used to be imported as an expense.
+      const type: TxnType = r.direction === "credit" ? "income" : "expense";
+
+      // If the file carries its own category and it matches one of ours, trust
+      // it over the merchant rules.
+      const fromFile = r.csvCategory
+        ? ref.categories.find(
+            (c) => c.name.toLowerCase() === r.csvCategory.trim().toLowerCase()
+          )
+        : undefined;
+      const fromRules = ref.categories.find((c) => c.name === s.categoryName);
+      let category = fromFile ?? fromRules ?? null;
+
+      // A transfer moves money between the user's own accounts. A CSV only
+      // ever shows one side, so importing it as a plain expense would
+      // double-count against the card purchases already recorded. Flag the row
+      // and leave it unticked rather than quietly getting the totals wrong.
+      const looksLikeTransfer =
+        inferType(r.direction, category?.name ?? s.categoryName, ref.categories) === "transfer";
+      if (looksLikeTransfer && category?.kind === "transfer") category = null;
+
       const bucket = ref.buckets.find((b) => b.name === s.bucketName) ?? defaultBucket;
-      const type: TxnType = inferType(r.direction, s.categoryName, ref.categories);
+      const duplicateOf = seen.get(`${r.date}|${r.amount.toFixed(2)}`) ?? null;
 
       return {
         key: `r${i}`,
@@ -95,13 +118,18 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
         rawDescription: r.description,
         amount: r.amount,
         type,
+        direction: r.direction,
         category_id: category?.id ?? null,
         bucket_id: bucket.id,
         event_id: null,
         note: "",
-        include: true,
-        duplicateOf: seen.get(`${r.date}|${r.amount.toFixed(2)}`) ?? null,
-        confidence: s.confidence,
+        // Likely duplicates and likely transfers start unticked. Re-importing
+        // the same statement is an easy mistake and silently doubles a month's
+        // spending, so bringing a flagged row in is a deliberate act.
+        include: !looksLikeTransfer && !duplicateOf,
+        duplicateOf,
+        looksLikeTransfer,
+        confidence: fromFile ? 0.95 : s.confidence,
       };
     });
 
@@ -149,16 +177,18 @@ export async function commitImport(
     // pair — a half-finished import would be worse than a failed one.
     const batchId = crypto.randomUUID();
 
-    // A transfer needs a destination, which a CSV can't tell us. Anything the
-    // rules guessed as a transfer is imported as a plain expense/income so the
-    // check constraint holds; the user can convert it afterwards.
+    // A transfer needs a destination, which a CSV cannot supply, so nothing is
+    // ever staged as one — transfer-looking rows arrive unticked instead.
     const cols = 11;
     const values: unknown[] = [];
     const tuples = keep.map((r, i) => {
       const b = i * cols;
       values.push(
         r.txn_date,
-        r.type === "transfer" ? "expense" : r.type,
+        // Nothing is ever staged as a transfer, so this only guards against a
+        // malformed payload — and it falls back to the statement's own
+        // direction rather than assuming money went out.
+        r.type === "transfer" ? (r.direction === "credit" ? "income" : "expense") : r.type,
         r.amount,
         account_id,
         credit_card_id,

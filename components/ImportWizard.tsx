@@ -30,7 +30,9 @@ export function ImportWizard({ refData }: { refData: RefData }) {
   const [busy, start] = useTransition();
 
   const included = rows.filter((r) => r.include);
-  const dupes = rows.filter((r) => r.duplicateOf && r.include).length;
+  const dupes = rows.filter((r) => r.duplicateOf).length;
+  const transfers = rows.filter((r) => r.looksLikeTransfer).length;
+  const credits = included.filter((r) => r.direction === "credit").length;
   const total = included.reduce((s, r) => s + r.amount, 0);
 
   function handleFile(file: File) {
@@ -238,8 +240,28 @@ export function ImportWizard({ refData }: { refData: RefData }) {
               {preview.skipped > 0 && (
                 <Stat label="Skipped" value={String(preview.skipped)} hint="no date or amount" />
               )}
-              {dupes > 0 && (
+              <Stat label="Money in / out" value={`${credits} / ${included.length - credits}`} />
+              {transfers > 0 && (
+              <p
+                className="flex items-start gap-2 text-[12px] mt-3 px-3 py-2 rounded-md m-0"
+                style={{ background: "var(--warning-bg)", color: "var(--warning)" }}
+              >
+                <IconAlert size={14} />
+                <span>
+                  {transfers} row{transfers === 1 ? "" : "s"} look like money moving
+                  between your own accounts (a card payment, ATM withdrawal or self
+                  transfer). A statement only shows one side, so importing them as
+                  spending would double-count. They are left unticked &mdash; tick any
+                  you do want as a plain expense.
+                </span>
+              </p>
+            )}
+
+            {dupes > 0 && (
                 <Stat label="Possible duplicates" value={String(dupes)} tone="var(--warning)" />
+              )}
+              {transfers > 0 && (
+                <Stat label="Look like transfers" value={String(transfers)} tone="var(--warning)" />
               )}
             </div>
 
@@ -254,6 +276,22 @@ export function ImportWizard({ refData }: { refData: RefData }) {
               ))}
             </div>
 
+            {transfers > 0 && (
+              <p
+                className="flex items-start gap-2 text-[12px] mt-3 px-3 py-2 rounded-md m-0"
+                style={{ background: "var(--warning-bg)", color: "var(--warning)" }}
+              >
+                <IconAlert size={14} />
+                <span>
+                  {transfers} row{transfers === 1 ? "" : "s"} look like money moving
+                  between your own accounts (a card payment, ATM withdrawal or self
+                  transfer). A statement only shows one side, so importing them as
+                  spending would double-count. They are left unticked &mdash; tick any
+                  you do want as a plain expense.
+                </span>
+              </p>
+            )}
+
             {dupes > 0 && (
               <p
                 className="flex items-start gap-2 text-[12px] mt-3 px-3 py-2 rounded-md m-0"
@@ -262,8 +300,8 @@ export function ImportWizard({ refData }: { refData: RefData }) {
                 <IconAlert size={14} />
                 <span>
                   {dupes} row{dupes === 1 ? "" : "s"} match a transaction already recorded on
-                  the same date for the same amount. They are still selected — uncheck any
-                  you don&apos;t want.
+                  the same date for the same amount. They are left unticked — tick any
+                  you do want to bring in anyway.
                 </span>
               </p>
             )}
@@ -431,10 +469,25 @@ function StagedTable({
                     Possible duplicate
                   </span>
                 )}
+                {r.looksLikeTransfer && (
+                  <span className="chip mt-1" style={{ color: "var(--warning)" }}>
+                    Looks like a transfer
+                  </span>
+                )}
               </td>
 
               <td className="px-3 py-2 tnum font-semibold whitespace-nowrap">
-                {formatINR(r.amount)}
+                <span
+                  style={{
+                    color: r.direction === "credit" ? "var(--income)" : "var(--expense)",
+                  }}
+                >
+                  {r.direction === "credit" ? "+" : "−"}
+                  {formatINR(r.amount)}
+                </span>
+                <span className="block text-[10px] font-normal" style={{ color: "var(--text-subtle)" }}>
+                  {r.direction === "credit" ? "Credit" : "Debit"}
+                </span>
               </td>
 
               <td className="px-2 py-1.5">

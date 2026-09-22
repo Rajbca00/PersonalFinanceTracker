@@ -121,19 +121,24 @@ export interface TxnFilters {
   pageSize?: number;
 }
 
-/** A CSV row after parsing and AI/rule categorization, before import. */
+/** A CSV row after parsing and rule categorization, before import. */
 export interface StagedRow {
   key: string;
   txn_date: string;
   merchant: string;
   rawDescription: string;
   amount: number;
+  /** Only ever "expense" or "income" — a CSV cannot name a transfer's other side. */
   type: TxnType;
+  /** What the statement said: the source of truth for `type`. */
+  direction: "debit" | "credit";
   category_id: string | null;
   bucket_id: string;
   event_id: string | null;
   note: string;
   include: boolean;
   duplicateOf: string | null;
+  /** Looks like a move between your own accounts (card payment, ATM, self NEFT). */
+  looksLikeTransfer: boolean;
   confidence: number;
 }
