@@ -1,7 +1,11 @@
 -- =============================================================
 -- Personal Finance Tracker — schema
--- Run this in the Supabase SQL Editor.
+--
+-- Run this against your Neon database, either in the Neon SQL Editor or:
+--   psql "$DATABASE_URL" -f db/schema.sql
+--
 -- Safe to re-run: it drops and recreates everything.
+-- Plain Postgres — no extensions and no vendor-specific features.
 -- =============================================================
 
 drop view  if exists card_balances      cascade;
@@ -15,10 +19,10 @@ drop table if exists categories         cascade;
 drop table if exists buckets            cascade;
 drop table if exists users              cascade;
 
-create extension if not exists pgcrypto;
+-- gen_random_uuid() is built into Postgres 13+, so no pgcrypto needed.
 
--- Single-tenant today; the user_id column is here so that going
--- multi-user later is an RLS policy change, not a migration.
+-- Single-tenant today; the user_id column is here so that adding real
+-- multi-user access later is a policy change rather than a migration.
 create table users (
   id          uuid primary key default gen_random_uuid(),
   email       text unique,
@@ -250,15 +254,14 @@ left join transactions t
 group by c.id;
 
 -- ------------------------------------------------------------------
--- RLS: enabled everywhere with no policies. The app connects with the
--- service role key from server code only, which bypasses RLS. The anon
--- key therefore reads nothing, even if the project URL is public.
+-- Access model
+--
+-- There is no row-level security here, and it would buy nothing: the app
+-- holds a single Postgres role via DATABASE_URL, used only from server
+-- code, and there is no public API surface onto these tables. The browser
+-- never receives a database credential.
+--
+-- If this ever becomes genuinely multi-user, the user_id column on every
+-- table is the hook: enable RLS, add policies comparing user_id to the
+-- authenticated user, and connect as a non-owner role.
 -- ------------------------------------------------------------------
-alter table users          enable row level security;
-alter table buckets        enable row level security;
-alter table categories     enable row level security;
-alter table accounts       enable row level security;
-alter table credit_cards   enable row level security;
-alter table events         enable row level security;
-alter table import_batches enable row level security;
-alter table transactions   enable row level security;

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { ThemeProvider, themeScript } from "@/components/ThemeProvider";
 import "./globals.css";
 
@@ -20,11 +21,17 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        {/* Applies the stored theme before first paint — no flash of the wrong theme. */}
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
       <body>
+        {/*
+          Applies the stored theme before first paint, so there's no flash of
+          the wrong one. This goes through next/script rather than a bare
+          <script> tag: React 19 does not execute inline scripts rendered by a
+          component, and "beforeInteractive" is what guarantees it runs ahead
+          of hydration.
+        */}
+        <Script id="theme-init" strategy="beforeInteractive">
+          {themeScript}
+        </Script>
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

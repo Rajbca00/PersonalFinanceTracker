@@ -17,7 +17,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <AppShell ref={ref} gated={gateEnabled()}>
+    <AppShell refData={ref} gated={gateEnabled()}>
       {children}
     </AppShell>
   );

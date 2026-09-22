@@ -1,8 +1,8 @@
 import { IconAlert } from "./Icons";
 
 /**
- * Shown instead of the app when Supabase isn't reachable — a blank dashboard
- * with a stack trace in the console is a bad first five minutes.
+ * Shown instead of the app when the database isn't reachable — a blank
+ * dashboard with a stack trace in the console is a bad first five minutes.
  */
 export function SetupNotice({ kind, detail }: { kind: "env" | "query"; detail?: string }) {
   const envMissing = kind === "env";
@@ -18,22 +18,25 @@ export function SetupNotice({ kind, detail }: { kind: "env" | "query"; detail?: 
         </div>
 
         <h1 className="text-lg font-semibold mb-1">
-          {envMissing ? "Connect your Supabase project" : "Supabase is configured, but the query failed"}
+          {envMissing
+            ? "Connect your database"
+            : "The database is configured, but the query failed"}
         </h1>
         <p className="text-sm mb-5" style={{ color: "var(--text-muted)" }}>
           {envMissing
-            ? "The app needs a database before it can show anything."
-            : "The credentials were found, but reading from the database did not work. The most likely cause is that the schema has not been created yet."}
+            ? "The app needs a Postgres database before it can show anything."
+            : "The connection string was found, but reading from the database did not work. The most likely cause is that the schema has not been created yet."}
         </p>
 
         <ol className="space-y-3 text-sm" style={{ color: "var(--text-muted)" }}>
           <li>
-            <strong style={{ color: "var(--text)" }}>1. Create a Supabase project</strong> at
-            supabase.com, then open the SQL Editor.
+            <strong style={{ color: "var(--text)" }}>1. Create a Neon project</strong> at
+            neon.tech and copy the connection string from the dashboard.
           </li>
           <li>
             <strong style={{ color: "var(--text)" }}>2. Run the schema</strong> — paste{" "}
-            <code>supabase/schema.sql</code>, then <code>supabase/seed.sql</code> for sample data.
+            <code>db/schema.sql</code> into the Neon SQL Editor, then{" "}
+            <code>db/seed.sql</code> for sample data.
           </li>
           <li>
             <strong style={{ color: "var(--text)" }}>3. Set the environment variables</strong> in{" "}
@@ -42,9 +45,9 @@ export function SetupNotice({ kind, detail }: { kind: "env" | "query"; detail?: 
               className="mt-2 p-3 rounded-md text-xs overflow-x-auto"
               style={{ background: "var(--surface-2)", color: "var(--text)" }}
             >
-{`NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<service role key>
-APP_PASSWORD=<password for the app>`}
+{`DATABASE_URL=postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
+APP_PASSWORD=<password for the app>
+AUTH_SECRET=<random string>`}
             </pre>
           </li>
           <li>

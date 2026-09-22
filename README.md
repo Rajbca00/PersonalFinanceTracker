@@ -1,7 +1,7 @@
 # Personal Finance Tracker
 
 A personal finance tracker for accounts, credit cards, spending buckets and
-trips — built for daily use rather than accounting. Next.js + Supabase,
+trips — built for daily use rather than accounting. Next.js + Neon Postgres,
 deployable to Vercel.
 
 **Core workflow:** add or import a transaction → categorize it → assign a bucket
@@ -14,12 +14,13 @@ deployable to Vercel.
 | Piece | Choice | Why |
 |---|---|---|
 | Framework | Next.js 16 (App Router) | Server components + server actions; one deployable unit |
-| Database | Supabase (Postgres) | Managed Postgres, works with Vercel's serverless filesystem |
+| Database | Neon (serverless Postgres) | HTTP driver, so no connection pool to exhaust on Vercel |
 | Styling | Tailwind v4 + CSS variables | Theming (light/dark/system + 4 accents) without a runtime |
 | Charts | Hand-rolled SVG/HTML | No chart dependency; colours follow the theme tokens |
 | CSV | Custom quote-aware parser | Bank exports vary too much for a fixed schema |
 
-No chart library, no CSV library, no UI kit — five runtime dependencies total.
+No chart library, no CSV library, no UI kit — four runtime dependencies total
+(`@neondatabase/serverless`, `next`, `react`, `react-dom`).
 
 ---
 
@@ -27,11 +28,18 @@ No chart library, no CSV library, no UI kit — five runtime dependencies total.
 
 ### 1. Create the database
 
-In a new [Supabase](https://supabase.com) project, open the **SQL Editor** and run:
+In a new [Neon](https://neon.tech) project, open the **SQL Editor** and run:
 
-1. `supabase/schema.sql` — tables, indexes, balance views, RLS
-2. `supabase/seed.sql` — *optional* sample data (Jul–Sep 2026) so the dashboard
+1. `db/schema.sql` — tables, indexes, balance views, triggers
+2. `db/seed.sql` — *optional* sample data (Jul–Sep 2026) so the dashboard
    has something to show immediately
+
+Or, once `.env.local` exists (step 2), run them from here:
+
+```bash
+npm run db:schema
+npm run db:seed
+```
 
 Both are safe to re-run; they drop and recreate.
 
@@ -40,13 +48,13 @@ Both are safe to re-run; they drop and recreate.
 Copy `.env.example` to `.env.local` and fill in:
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<service role key>
+DATABASE_URL=postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/neondb?sslmode=require
 APP_PASSWORD=<a strong password>
 AUTH_SECRET=<random string, e.g. openssl rand -base64 32>
 ```
 
-Both Supabase values are under **Project Settings → API**.
+Use the **pooled** connection string from the Neon dashboard, and keep
+`?sslmode=require`.
 
 ### 3. Run it
 
@@ -66,7 +74,7 @@ page instead of a stack trace.
 npx vercel
 ```
 
-Then add the same four environment variables in **Project → Settings →
+Then add the same three environment variables in **Project → Settings →
 Environment Variables** and redeploy. Every page is `force-dynamic`, so no build
 -time database access is needed and the build works before the schema exists.
 
@@ -76,14 +84,15 @@ Environment Variables** and redeploy. Every page is `force-dynamic`, so no build
 
 This app holds real financial data at a public URL, so two things are deliberate:
 
-- **The service-role key never reaches the browser.** All database access runs in
-  server components and server actions. RLS is enabled on every table with *no
-  policies*, so the anon key reads nothing even if the project URL leaks.
+- **`DATABASE_URL` never reaches the browser.** It has no `NEXT_PUBLIC_` prefix,
+  and every query runs inside a server component, a server action, or the proxy.
+  There is no public API surface onto these tables, so the browser is never
+  handed a database credential.
 - **A password gate sits in front of the app.** `APP_PASSWORD` plus an
   HMAC-signed, HTTP-only cookie (30 days). This is a single shared password, not
-  user accounts — if you ever need real multi-user access, move to Supabase Auth
-  and add RLS policies keyed on `users.id`. The schema already carries a
-  `user_id` column on every table for exactly that.
+  user accounts — if you ever need real multi-user access, add an auth provider
+  and RLS policies keyed on `users.id`, connecting as a non-owner role. The
+  schema already carries a `user_id` column on every table for exactly that.
 
 If `APP_PASSWORD` is unset the gate is **off** — convenient locally, and the app
 warns you in the sidebar and on Settings. Set it before deploying.
@@ -185,8 +194,9 @@ app/
     import/             CSV wizard
     settings/           theme, data, categories
   login/              password gate
-  setup/              shown when Supabase isn't configured
+  setup/              shown when DATABASE_URL isn't set
 lib/
+  db.ts               Neon connection + safe SET-clause builder
   queries.ts          reads
   actions.ts          writes (server actions)
   import-actions.ts   CSV preview + commit
@@ -195,7 +205,8 @@ lib/
   format.ts           Indian currency + date helpers
   auth.ts             HMAC session cookie
 components/           UI, charts, managers
-supabase/             schema.sql, seed.sql
+scripts/run-sql.mjs   applies a .sql file to DATABASE_URL
+db/                   schema.sql, seed.sql
 proxy.ts              setup redirect + auth gate
 ```
 
@@ -208,4 +219,6 @@ npm run dev        # dev server on :3000
 npm run build      # production build
 npm run start      # serve the build
 npm run typecheck  # tsc --noEmit
+npm run db:schema  # apply db/schema.sql to DATABASE_URL
+npm run db:seed    # load the sample data
 ```

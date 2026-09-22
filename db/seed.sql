@@ -1,6 +1,6 @@
 -- =============================================================
 -- Personal Finance Tracker — sample data
--- Run AFTER schema.sql. Safe to re-run (it clears the tables first).
+-- Run AFTER schema.sql (Neon SQL Editor, or psql "$DATABASE_URL" -f db/seed.sql). Safe to re-run (it clears the tables first).
 -- Covers Jul / Aug / Sep 2026 so month comparison and trip
 -- highlighting have something real to show.
 -- =============================================================

@@ -26,12 +26,12 @@ const AddCtx = createContext<() => void>(() => {});
 export const useAddTransaction = () => useContext(AddCtx);
 
 interface Props {
-  ref: RefData;
+  refData: RefData;
   gated: boolean;
   children: React.ReactNode;
 }
 
-export function AppShell({ ref: refData, gated, children }: Props) {
+export function AppShell({ refData, gated, children }: Props) {
   const pathname = usePathname();
   const [drawer, setDrawer] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -49,7 +49,7 @@ export function AppShell({ ref: refData, gated, children }: Props) {
     };
   }, [drawer]);
 
-  const nav = <SidebarNav ref={refData} pathname={pathname} gated={gated} />;
+  const nav = <SidebarNav refData={refData} pathname={pathname} gated={gated} />;
 
   return (
     <AddCtx.Provider value={openAdd}>
@@ -195,7 +195,7 @@ export function AppShell({ ref: refData, gated, children }: Props) {
         </button>
       </nav>
 
-      <TransactionForm open={adding} onClose={() => setAdding(false)} ref={refData} />
+      <TransactionForm open={adding} onClose={() => setAdding(false)} refData={refData} />
     </AddCtx.Provider>
   );
 }
@@ -242,11 +242,11 @@ function BottomLink({
 // ------------------------------------------------------------------ nav
 
 function SidebarNav({
-  ref: refData,
+  refData,
   pathname,
   gated,
 }: {
-  ref: RefData;
+  refData: RefData;
   pathname: string;
   gated: boolean;
 }) {

@@ -6,10 +6,10 @@ import type { RefData, TxnFilters } from "@/lib/types";
 import { IconFilter, IconSearch, IconX } from "./Icons";
 
 export function TransactionFilters({
-  ref: refData,
+  refData,
   current,
 }: {
-  ref: RefData;
+  refData: RefData;
   current: TxnFilters;
 }) {
   const router = useRouter();

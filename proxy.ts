@@ -2,13 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, gateEnabled, verifySessionToken } from "@/lib/auth";
 
 /**
- * Checked here rather than via lib/supabase so the Edge bundle doesn't pull in
- * the Supabase client just to read two environment variables.
+ * Checked here rather than via lib/db so the Edge bundle doesn't pull in the
+ * Postgres driver just to read one environment variable.
  */
-function supabaseConfigured(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
+function dbConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL);
 }
 
 export async function proxy(req: NextRequest) {
@@ -17,7 +15,7 @@ export async function proxy(req: NextRequest) {
   // Without a database every page would throw during render, so route to the
   // setup instructions before any page component runs. Layouts can't do this:
   // pages render in parallel with them and throw first.
-  if (!supabaseConfigured()) {
+  if (!dbConfigured()) {
     if (pathname === "/setup") return NextResponse.next();
     const url = req.nextUrl.clone();
     url.pathname = "/setup";

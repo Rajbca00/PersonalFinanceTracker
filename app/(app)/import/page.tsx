@@ -18,7 +18,7 @@ export default async function ImportPage() {
           </a>
         }
       />
-      <ImportWizard ref={ref} />
+      <ImportWizard refData={ref} />
     </>
   );
 }

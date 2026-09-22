@@ -1,4 +1,4 @@
-import { db, unwrap } from "./supabase";
+import { db } from "./db";
 import { toNumber } from "./format";
 import type {
   AccountWithBalance,
@@ -11,40 +11,61 @@ import type {
   TransactionRow,
   TripEvent,
   TxnFilters,
+  TxnType,
 } from "./types";
 
 /**
- * Reference data — accounts, cards, buckets, categories, events.
+ * Dates and timestamps are cast to text in SQL rather than letting the driver
+ * hand back JS Date objects. The app treats a transaction date as a calendar
+ * day ("2026-09-22"), and a Date would drag a timezone along with it — which
+ * is exactly how transactions end up in the wrong month.
  *
- * Small enough to load on every page, and loading it lets us resolve
- * transaction display names in JS instead of asking PostgREST to embed four
- * foreign keys that point at only two tables.
+ * numeric columns arrive as strings (Postgres numerics don't fit a JS number
+ * safely in general), so every one goes through toNumber().
  */
+const TXN_COLS = `
+  id, txn_date::text as txn_date, type, amount,
+  account_id, credit_card_id, dest_account_id, dest_credit_card_id,
+  bucket_id, category_id, event_id,
+  merchant, note, reviewed, import_batch_id, external_ref,
+  created_at::text as created_at, updated_at::text as updated_at
+`;
+
 export async function getRefData(): Promise<RefData> {
-  const c = db();
-  const [accounts, cards, buckets, categories, events] = await Promise.all([
-    c.from("account_balances").select("*").order("sort_order"),
-    c.from("card_balances").select("*").order("sort_order"),
-    c.from("buckets").select("*").order("sort_order"),
-    c.from("categories").select("*").order("sort_order"),
-    c.from("events").select("*").order("start_date", { ascending: false }),
+  const sql = db();
+
+  // One round trip for all five, rather than five HTTP requests.
+  const [accounts, cards, buckets, categories, events] = await sql.transaction([
+    sql`select id, user_id, name, type, institution, opening_balance,
+               is_active, sort_order, current_balance
+        from account_balances order by sort_order, name`,
+    sql`select id, user_id, name, provider, credit_limit, opening_outstanding,
+               statement_day, due_day, is_active, sort_order, current_outstanding
+        from card_balances order by sort_order, name`,
+    sql`select id, name, color, sort_order, is_archived
+        from buckets order by sort_order, name`,
+    sql`select id, name, kind, icon, is_system, is_archived, sort_order
+        from categories order by sort_order, name`,
+    sql`select id, name, start_date::text as start_date, end_date::text as end_date,
+               description, bucket_id
+        from events order by start_date desc nulls last, name`,
   ]);
 
   return {
-    accounts: unwrap<AccountWithBalance[]>(accounts, "accounts").map((a) => ({
-      ...a,
-      opening_balance: toNumber(a.opening_balance),
-      current_balance: toNumber(a.current_balance),
+    accounts: (accounts as Record<string, unknown>[]).map((a) => ({
+      ...(a as unknown as AccountWithBalance),
+      opening_balance: toNumber(a.opening_balance as string),
+      current_balance: toNumber(a.current_balance as string),
     })),
-    cards: unwrap<CreditCardWithBalance[]>(cards, "cards").map((c2) => ({
-      ...c2,
-      credit_limit: c2.credit_limit === null ? null : toNumber(c2.credit_limit),
-      opening_outstanding: toNumber(c2.opening_outstanding),
-      current_outstanding: toNumber(c2.current_outstanding),
+    cards: (cards as Record<string, unknown>[]).map((c) => ({
+      ...(c as unknown as CreditCardWithBalance),
+      credit_limit: c.credit_limit === null ? null : toNumber(c.credit_limit as string),
+      opening_outstanding: toNumber(c.opening_outstanding as string),
+      current_outstanding: toNumber(c.current_outstanding as string),
     })),
-    buckets: unwrap<Bucket[]>(buckets, "buckets"),
-    categories: unwrap<Category[]>(categories, "categories"),
-    events: unwrap<TripEvent[]>(events, "events"),
+    buckets: buckets as unknown as Bucket[],
+    categories: categories as unknown as Category[],
+    events: events as unknown as TripEvent[],
   };
 }
 
@@ -71,6 +92,55 @@ export function decorate(txns: Transaction[], ref: RefData): TransactionRow[] {
   }));
 }
 
+/** Turns filters into a WHERE clause plus bound parameters. */
+function whereFor(f: TxnFilters): { clause: string; params: unknown[] } {
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  const p = (v: unknown) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+
+  if (f.from) parts.push(`txn_date >= ${p(f.from)}`);
+  if (f.to) parts.push(`txn_date <= ${p(f.to)}`);
+  if (f.bucketId) parts.push(`bucket_id = ${p(f.bucketId)}`);
+  if (f.categoryId) parts.push(`category_id = ${p(f.categoryId)}`);
+  if (f.eventId) parts.push(`event_id = ${p(f.eventId)}`);
+  if (f.type) parts.push(`type = ${p(f.type)}`);
+  if (f.reviewed !== undefined) parts.push(`reviewed = ${p(f.reviewed)}`);
+  if (f.minAmount !== undefined) parts.push(`amount >= ${p(f.minAmount)}`);
+  if (f.maxAmount !== undefined) parts.push(`amount <= ${p(f.maxAmount)}`);
+
+  // An account filter should include money that arrived there by transfer.
+  if (f.accountId) {
+    const v = p(f.accountId);
+    parts.push(`(account_id = ${v} or dest_account_id = ${v})`);
+  }
+  if (f.cardId) {
+    const v = p(f.cardId);
+    parts.push(`(credit_card_id = ${v} or dest_credit_card_id = ${v})`);
+  }
+
+  if (f.search) {
+    const term = `%${f.search.trim()}%`;
+    const v = p(term);
+    parts.push(`(merchant ilike ${v} or note ilike ${v})`);
+  }
+
+  return {
+    clause: parts.length ? `where ${parts.join(" and ")}` : "",
+    params,
+  };
+}
+
+/** Whitelisted — never interpolate a sort value from the query string. */
+const ORDER: Record<string, string> = {
+  date_desc: "txn_date desc, created_at desc",
+  date_asc: "txn_date asc, created_at asc",
+  amount_desc: "amount desc, txn_date desc",
+  amount_asc: "amount asc, txn_date desc",
+};
+
 export interface TxnPage {
   rows: TransactionRow[];
   total: number;
@@ -79,55 +149,29 @@ export interface TxnPage {
 }
 
 export async function getTransactions(filters: TxnFilters, ref: RefData): Promise<TxnPage> {
+  const sql = db();
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(200, Math.max(10, filters.pageSize ?? 50));
 
-  let q = db().from("transactions").select("*", { count: "exact" });
+  const { clause, params } = whereFor(filters);
+  const order = ORDER[filters.sort ?? "date_desc"] ?? ORDER.date_desc;
 
-  if (filters.from) q = q.gte("txn_date", filters.from);
-  if (filters.to) q = q.lte("txn_date", filters.to);
-  if (filters.bucketId) q = q.eq("bucket_id", filters.bucketId);
-  if (filters.categoryId) q = q.eq("category_id", filters.categoryId);
-  if (filters.eventId) q = q.eq("event_id", filters.eventId);
-  if (filters.type) q = q.eq("type", filters.type);
-  if (filters.reviewed !== undefined) q = q.eq("reviewed", filters.reviewed);
-  if (filters.minAmount !== undefined) q = q.gte("amount", filters.minAmount);
-  if (filters.maxAmount !== undefined) q = q.lte("amount", filters.maxAmount);
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
 
-  // An account filter should include money that arrived there by transfer.
-  if (filters.accountId) {
-    q = q.or(`account_id.eq.${filters.accountId},dest_account_id.eq.${filters.accountId}`);
-  }
-  if (filters.cardId) {
-    q = q.or(`credit_card_id.eq.${filters.cardId},dest_credit_card_id.eq.${filters.cardId}`);
-  }
-
-  if (filters.search) {
-    const safe = filters.search.replace(/[%,()]/g, " ").trim();
-    if (safe) q = q.or(`merchant.ilike.%${safe}%,note.ilike.%${safe}%`);
-  }
-
-  switch (filters.sort) {
-    case "date_asc":
-      q = q.order("txn_date", { ascending: true }).order("created_at", { ascending: true });
-      break;
-    case "amount_desc":
-      q = q.order("amount", { ascending: false });
-      break;
-    case "amount_asc":
-      q = q.order("amount", { ascending: true });
-      break;
-    default:
-      q = q.order("txn_date", { ascending: false }).order("created_at", { ascending: false });
-  }
-
-  const fromIdx = (page - 1) * pageSize;
-  const res = await q.range(fromIdx, fromIdx + pageSize - 1);
-  if (res.error) throw new Error(`transactions: ${res.error.message}`);
+  // Count and page in one round trip, so the total can't disagree with the rows.
+  const [rows, counted] = await sql.transaction([
+    sql.query(
+      `select ${TXN_COLS} from transactions ${clause}
+       order by ${order} limit $${limitIdx} offset $${offsetIdx}`,
+      [...params, pageSize, (page - 1) * pageSize]
+    ),
+    sql.query(`select count(*)::text as total from transactions ${clause}`, params),
+  ]);
 
   return {
-    rows: decorate((res.data ?? []) as Transaction[], ref),
-    total: res.count ?? 0,
+    rows: decorate(rows as unknown as Transaction[], ref),
+    total: toNumber((counted as { total: string }[])[0]?.total),
     page,
     pageSize,
   };
@@ -169,9 +213,9 @@ export interface DashboardData {
 }
 
 /**
- * Pulls the month's transactions once and aggregates in JS. At personal-finance
- * volumes (hundreds of rows a month) this is faster than six round trips, and
- * it keeps every total derived from exactly the same row set.
+ * Pulls the period's transactions once and aggregates in JS. At personal
+ * finance volumes (hundreds of rows a month) this beats six round trips, and
+ * every total ends up derived from exactly the same row set.
  */
 export async function getDashboard(
   from: string,
@@ -180,23 +224,38 @@ export async function getDashboard(
   ref: RefData,
   prev?: { from: string; to: string }
 ): Promise<DashboardData> {
-  const c = db();
+  const sql = db();
 
-  let q = c.from("transactions").select("*").gte("txn_date", from).lte("txn_date", to);
-  if (bucketId) q = q.eq("bucket_id", bucketId);
+  const curParams: unknown[] = [from, to];
+  let curWhere = "txn_date >= $1 and txn_date <= $2";
+  if (bucketId) {
+    curParams.push(bucketId);
+    curWhere += ` and bucket_id = $${curParams.length}`;
+  }
 
-  const prevQuery = prev
-    ? (() => {
-        let p = c.from("transactions").select("type, amount, bucket_id").gte("txn_date", prev.from).lte("txn_date", prev.to);
-        if (bucketId) p = p.eq("bucket_id", bucketId);
-        return p;
-      })()
-    : null;
+  const prevParams: unknown[] = prev ? [prev.from, prev.to] : [];
+  let prevWhere = "txn_date >= $1 and txn_date <= $2";
+  if (prev && bucketId) {
+    prevParams.push(bucketId);
+    prevWhere += ` and bucket_id = $${prevParams.length}`;
+  }
 
-  const [cur, previous] = await Promise.all([q, prevQuery ?? Promise.resolve({ data: [], error: null })]);
-  if (cur.error) throw new Error(`dashboard: ${cur.error.message}`);
+  const queries = [
+    sql.query(`select ${TXN_COLS} from transactions where ${curWhere}`, curParams),
+  ];
+  if (prev) {
+    queries.push(
+      sql.query(
+        `select type, sum(amount)::text as total from transactions
+         where ${prevWhere} and type <> 'transfer' group by type`,
+        prevParams
+      )
+    );
+  }
 
-  const txns = decorate((cur.data ?? []) as Transaction[], ref);
+  const results = await sql.transaction(queries);
+  const txns = decorate(results[0] as unknown as Transaction[], ref);
+  const prevRows = (results[1] ?? []) as { type: TxnType; total: string }[];
 
   let income = 0;
   let expense = 0;
@@ -269,9 +328,9 @@ export async function getDashboard(
 
   let prevIncome = 0;
   let prevExpense = 0;
-  for (const p of (previous.data ?? []) as { type: string; amount: number }[]) {
-    if (p.type === "income") prevIncome += toNumber(p.amount);
-    else if (p.type === "expense") prevExpense += toNumber(p.amount);
+  for (const r of prevRows) {
+    if (r.type === "income") prevIncome = toNumber(r.total);
+    else if (r.type === "expense") prevExpense = toNumber(r.total);
   }
 
   return {
@@ -283,8 +342,8 @@ export async function getDashboard(
       .filter((a) => a.is_active)
       .reduce((s, a) => s + a.current_balance, 0),
     totalOutstanding: ref.cards
-      .filter((c2) => c2.is_active)
-      .reduce((s, c2) => s + c2.current_outstanding, 0),
+      .filter((c) => c.is_active)
+      .reduce((s, c) => s + c.current_outstanding, 0),
     byCategory: [...byCategory.values()].sort((a, b) => b.value - a.value),
     byBucket: [...byBucket.values()].sort((a, b) => b.expense - a.expense),
     bySource: [...bySource.values()].sort((a, b) => b.value - a.value),
@@ -301,25 +360,23 @@ export async function getDashboard(
 // ------------------------------------------------------------------
 
 export async function getEventsWithTotals(ref: RefData): Promise<EventWithTotals[]> {
-  const res = await db()
-    .from("transactions")
-    .select("event_id, amount, type")
-    .not("event_id", "is", null);
-  if (res.error) throw new Error(`event totals: ${res.error.message}`);
+  const sql = db();
 
-  const totals = new Map<string, { total: number; count: number }>();
-  for (const r of (res.data ?? []) as { event_id: string; amount: number; type: string }[]) {
-    if (r.type === "transfer") continue;
-    const cur = totals.get(r.event_id) ?? { total: 0, count: 0 };
-    cur.total += toNumber(r.amount);
-    cur.count += 1;
-    totals.set(r.event_id, cur);
-  }
+  const rows = (await sql`
+    select event_id,
+           sum(amount)::text as total,
+           count(*)::text    as count
+    from transactions
+    where event_id is not null and type <> 'transfer'
+    group by event_id
+  `) as unknown as { event_id: string; total: string; count: string }[];
+
+  const totals = new Map(rows.map((r) => [r.event_id, r]));
 
   return ref.events.map((e) => ({
     ...e,
-    total_spent: totals.get(e.id)?.total ?? 0,
-    txn_count: totals.get(e.id)?.count ?? 0,
+    total_spent: toNumber(totals.get(e.id)?.total),
+    txn_count: toNumber(totals.get(e.id)?.count),
   }));
 }
 

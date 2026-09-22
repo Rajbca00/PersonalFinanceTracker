@@ -32,12 +32,12 @@ const TYPES: { value: TxnType; label: string }[] = [
 export function TransactionForm({
   open,
   onClose,
-  ref: refData,
+  refData,
   editing,
 }: {
   open: boolean;
   onClose: () => void;
-  ref: RefData;
+  refData: RefData;
   editing?: TransactionRow | null;
 }) {
   const router = useRouter();

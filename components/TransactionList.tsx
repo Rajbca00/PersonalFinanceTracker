@@ -19,13 +19,13 @@ import {
 
 interface Props {
   rows: TransactionRow[];
-  ref: RefData;
+  refData: RefData;
   /** Dashboard preview: no checkboxes, no bulk bar. */
   compact?: boolean;
   emptyAction?: React.ReactNode;
 }
 
-export function TransactionList({ rows, ref: refData, compact, emptyAction }: Props) {
+export function TransactionList({ rows, refData, compact, emptyAction }: Props) {
   const router = useRouter();
   const [local, setLocal] = useState(rows);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -308,7 +308,7 @@ export function TransactionList({ rows, ref: refData, compact, emptyAction }: Pr
       {!compact && selected.size > 0 && (
         <BulkBar
           count={selected.size}
-          ref={refData}
+          refData={refData}
           busy={busy}
           onClear={() => setSelected(new Set())}
           onApply={(action) =>
@@ -327,7 +327,7 @@ export function TransactionList({ rows, ref: refData, compact, emptyAction }: Pr
       <TransactionForm
         open={Boolean(editing)}
         onClose={() => setEditing(null)}
-        ref={refData}
+        refData={refData}
         editing={editing}
       />
 
@@ -535,13 +535,13 @@ function InlineText({
 
 function BulkBar({
   count,
-  ref: refData,
+  refData,
   onApply,
   onClear,
   busy,
 }: {
   count: number;
-  ref: RefData;
+  refData: RefData;
   onApply: (a: BulkAction) => void;
   onClear: () => void;
   busy: boolean;

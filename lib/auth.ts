@@ -4,8 +4,8 @@
  * This app is meant to be deployed to a public Vercel URL with real financial
  * data behind it, so it should not be open to anyone who guesses the hostname.
  * This is a single shared password producing an HMAC-signed cookie — not user
- * accounts. If you ever need real multi-user access, move to Supabase Auth and
- * add RLS policies keyed on users.id.
+ * accounts. If you ever need real multi-user access, add a real auth provider
+ * and RLS policies keyed on users.id.
  *
  * Runs on the Edge runtime, so it uses Web Crypto rather than node:crypto.
  */

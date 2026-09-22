@@ -99,7 +99,7 @@ export default async function CardDetailPage({
       )}
 
       <Panel title={`Transactions (${total.toLocaleString("en-IN")})`} padded={false}>
-        <TransactionList rows={rows} ref={ref} emptyAction={<AddButton label="Add transaction" />} />
+        <TransactionList rows={rows} refData={ref} emptyAction={<AddButton label="Add transaction" />} />
       </Panel>
 
       <Pagination page={current} pageSize={pageSize} total={total} />

@@ -72,7 +72,7 @@ export default async function TransactionsPage({
         }
       />
 
-      <TransactionFilters ref={ref} current={filters} />
+      <TransactionFilters refData={ref} current={filters} />
 
       {rows.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-3 px-1">
@@ -94,7 +94,7 @@ export default async function TransactionsPage({
       <Panel padded={false}>
         <TransactionList
           rows={rows}
-          ref={ref}
+          refData={ref}
           emptyAction={
             <div className="flex gap-2">
               <AddButton label="Add transaction" />

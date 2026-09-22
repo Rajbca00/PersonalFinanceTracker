@@ -16,7 +16,7 @@ const STEPS = [
   { n: 3, label: "Done" },
 ] as const;
 
-export function ImportWizard({ ref: refData }: { ref: RefData }) {
+export function ImportWizard({ refData }: { refData: RefData }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
 

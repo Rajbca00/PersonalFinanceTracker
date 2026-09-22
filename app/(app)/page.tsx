@@ -301,7 +301,7 @@ export default async function DashboardPage({
             }
             padded={false}
           >
-            <TransactionList rows={recent.rows} ref={ref} compact />
+            <TransactionList rows={recent.rows} refData={ref} compact />
           </Panel>
         </>
       )}

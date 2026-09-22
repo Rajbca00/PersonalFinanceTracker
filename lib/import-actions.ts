@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "./supabase";
+import { db } from "./db";
 import { detectColumns, normalizeRows, parseCsv } from "./csv";
 import { inferType, suggestByRules } from "./categorize";
 import { getRefData } from "./queries";
@@ -60,8 +60,7 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
     }
 
     const ref = await getRefData();
-    const defaultBucket =
-      ref.buckets.find((b) => b.name === "Personal") ?? ref.buckets[0];
+    const defaultBucket = ref.buckets.find((b) => b.name === "Personal") ?? ref.buckets[0];
     if (!defaultBucket) {
       return { ...empty, error: "Create at least one bucket before importing." };
     }
@@ -70,27 +69,23 @@ export async function previewCsv(csvText: string, source: string): Promise<Previ
     const dates = normalized.map((r) => r.date).sort();
     const { account_id, credit_card_id } = splitSource(source);
 
-    let dupQuery = db()
-      .from("transactions")
-      .select("id, txn_date, amount, merchant")
-      .gte("txn_date", dates[0])
-      .lte("txn_date", dates[dates.length - 1]);
-    dupQuery = account_id
-      ? dupQuery.eq("account_id", account_id)
-      : dupQuery.eq("credit_card_id", credit_card_id!);
+    const existing = (await db().query(
+      `select id, txn_date::text as txn_date, amount::text as amount
+       from transactions
+       where txn_date >= $1 and txn_date <= $2
+         and ${account_id ? "account_id" : "credit_card_id"} = $3`,
+      [dates[0], dates[dates.length - 1], account_id ?? credit_card_id]
+    )) as unknown as { id: string; txn_date: string; amount: string }[];
 
-    const existing = await dupQuery;
     const seen = new Map<string, string>();
-    for (const e of (existing.data ?? []) as { id: string; txn_date: string; amount: number }[]) {
+    for (const e of existing) {
       seen.set(`${e.txn_date}|${toNumber(e.amount).toFixed(2)}`, e.id);
     }
 
     const rows: StagedRow[] = normalized.map((r, i) => {
       const s = suggestByRules(r.description, r.direction);
-      const category =
-        ref.categories.find((c) => c.name === s.categoryName) ?? null;
-      const bucket =
-        ref.buckets.find((b) => b.name === s.bucketName) ?? defaultBucket;
+      const category = ref.categories.find((c) => c.name === s.categoryName) ?? null;
+      const bucket = ref.buckets.find((b) => b.name === s.bucketName) ?? defaultBucket;
       const type: TxnType = inferType(r.direction, s.categoryName, ref.categories);
 
       return {
@@ -147,42 +142,57 @@ export async function commitImport(
     if (keep.length === 0) return { ok: false, error: "No rows selected.", imported: 0 };
 
     const { account_id, credit_card_id } = splitSource(source);
-    const c = db();
+    const sql = db();
 
-    const batch = await c
-      .from("import_batches")
-      .insert({
-        source_name: fileName,
-        account_id,
-        credit_card_id,
-        row_count: rows.length,
-        imported_count: keep.length,
-      })
-      .select("id")
-      .single();
-    if (batch.error) throw new Error(batch.error.message);
+    // The batch id is generated here rather than read back from an INSERT, so
+    // the batch row and its transactions can go in as one atomic statement
+    // pair — a half-finished import would be worse than a failed one.
+    const batchId = crypto.randomUUID();
 
     // A transfer needs a destination, which a CSV can't tell us. Anything the
     // rules guessed as a transfer is imported as a plain expense/income so the
     // check constraint holds; the user can convert it afterwards.
-    const payload = keep.map((r) => ({
-      txn_date: r.txn_date,
-      type: r.type === "transfer" ? ("expense" as TxnType) : r.type,
-      amount: r.amount,
-      account_id,
-      credit_card_id,
-      bucket_id: r.bucket_id,
-      category_id: r.category_id,
-      event_id: r.event_id,
-      merchant: r.merchant,
-      note: r.note || null,
-      reviewed: false,
-      import_batch_id: batch.data.id,
-      external_ref: r.rawDescription.slice(0, 200),
-    }));
+    const cols = 11;
+    const values: unknown[] = [];
+    const tuples = keep.map((r, i) => {
+      const b = i * cols;
+      values.push(
+        r.txn_date,
+        r.type === "transfer" ? "expense" : r.type,
+        r.amount,
+        account_id,
+        credit_card_id,
+        r.bucket_id,
+        r.category_id,
+        r.event_id,
+        r.merchant,
+        r.note || null,
+        r.rawDescription.slice(0, 200)
+      );
+      return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6},
+               $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}, $${b + 11}, false, $BATCH)`;
+    });
 
-    const res = await c.from("transactions").insert(payload);
-    if (res.error) throw new Error(res.error.message);
+    // Every tuple shares the one batch id, bound as the final parameter.
+    const batchParam = `$${values.length + 1}`;
+    const tupleSql = tuples.join(", ").replaceAll("$BATCH", batchParam);
+    values.push(batchId);
+
+    await sql.transaction([
+      sql.query(
+        `insert into import_batches (id, source_name, account_id, credit_card_id, row_count, imported_count)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [batchId, fileName, account_id, credit_card_id, rows.length, keep.length]
+      ),
+      sql.query(
+        `insert into transactions (
+           txn_date, type, amount, account_id, credit_card_id,
+           bucket_id, category_id, event_id, merchant, note, external_ref,
+           reviewed, import_batch_id
+         ) values ${tupleSql}`,
+        values
+      ),
+    ]);
 
     revalidatePath("/", "layout");
     return { ok: true, imported: keep.length };
