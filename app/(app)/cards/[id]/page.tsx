@@ -5,7 +5,7 @@ import { Pagination } from "@/components/Pagination";
 import { TransactionList } from "@/components/TransactionList";
 import { PageHeader, Panel, StatCard } from "@/components/Ui";
 import { formatINR } from "@/lib/format";
-import { getRefData, getTransactions } from "@/lib/queries";
+import { getCardLedger, getRefData } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +23,11 @@ export default async function CardDetailPage({
   const card = ref.cards.find((c) => c.id === id);
   if (!card) notFound();
 
-  const { rows, total, page: current, pageSize } = await getTransactions(
-    { cardId: id, page: Number(page) || 1, pageSize: 50 },
+  const { rows, total, page: current, pageSize } = await getCardLedger(
+    id,
+    card.opening_outstanding,
+    Number(page) || 1,
+    50,
     ref
   );
 
@@ -99,7 +102,7 @@ export default async function CardDetailPage({
       )}
 
       <Panel title={`Transactions (${total.toLocaleString("en-IN")})`} padded={false}>
-        <TransactionList rows={rows} refData={ref} emptyAction={<AddButton label="Add transaction" />} />
+        <TransactionList rows={rows} refData={ref} ledger="card" emptyAction={<AddButton label="Add transaction" />} />
       </Panel>
 
       <Pagination page={current} pageSize={pageSize} total={total} />

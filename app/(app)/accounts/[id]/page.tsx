@@ -4,7 +4,7 @@ import { AddButton } from "@/components/AddButton";
 import { Pagination } from "@/components/Pagination";
 import { TransactionList } from "@/components/TransactionList";
 import { PageHeader, Panel, StatCard } from "@/components/Ui";
-import { getRefData, getTransactions } from "@/lib/queries";
+import { getAccountLedger, getRefData } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -22,14 +22,18 @@ export default async function AccountDetailPage({
   const account = ref.accounts.find((a) => a.id === id);
   if (!account) notFound();
 
-  const { rows, total, page: current, pageSize } = await getTransactions(
-    { accountId: id, page: Number(page) || 1, pageSize: 50 },
+  const { rows, total, page: current, pageSize } = await getAccountLedger(
+    id,
+    account.opening_balance,
+    Number(page) || 1,
+    50,
     ref
   );
 
-  // Lifetime totals for this account, derived from the same rows the view uses.
-  const income = rows.filter((r) => r.type === "income" && r.account_id === id).reduce((s, r) => s + r.amount, 0);
-  const expense = rows.filter((r) => r.type === "expense" && r.account_id === id).reduce((s, r) => s + r.amount, 0);
+  // Totals for what's on screen, from the same rows the ledger shows. delta is
+  // this account's signed view of each row, so a transfer out counts as out.
+  const income = rows.reduce((s, r) => s + Math.max(r.delta ?? 0, 0), 0);
+  const expense = rows.reduce((s, r) => s + Math.max(-(r.delta ?? 0), 0), 0);
 
   return (
     <>
@@ -57,7 +61,7 @@ export default async function AccountDetailPage({
         title={`Transactions (${total.toLocaleString("en-IN")})`}
         padded={false}
       >
-        <TransactionList rows={rows} refData={ref} emptyAction={<AddButton label="Add transaction" />} />
+        <TransactionList rows={rows} refData={ref} ledger="account" emptyAction={<AddButton label="Add transaction" />} />
       </Panel>
 
       <Pagination page={current} pageSize={pageSize} total={total} />

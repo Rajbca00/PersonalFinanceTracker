@@ -186,6 +186,135 @@ export async function getTransactions(filters: TxnFilters, ref: RefData): Promis
 }
 
 // ------------------------------------------------------------------
+// Account / card ledger (running balance)
+// ------------------------------------------------------------------
+
+/**
+ * How one transaction moves THIS account's balance. Mirrors the
+ * account_balances view exactly, so the last row of the ledger always equals
+ * the balance shown in the sidebar.
+ */
+const ACCOUNT_DELTA = `
+  case
+    when t.account_id      = $1 and t.type = 'income'   then  t.amount
+    when t.account_id      = $1 and t.type = 'expense'  then -t.amount
+    when t.account_id      = $1 and t.type = 'transfer' then -t.amount
+    when t.dest_account_id = $1 and t.type = 'transfer' then  t.amount
+    else 0
+  end
+`;
+
+/**
+ * Same idea for a card, where the running figure is what you OWE, so a
+ * purchase increases it and a payment reduces it.
+ */
+const CARD_DELTA = `
+  case
+    when t.credit_card_id      = $1 and t.type = 'expense'  then  t.amount
+    when t.credit_card_id      = $1 and t.type = 'income'   then -t.amount
+    when t.credit_card_id      = $1 and t.type = 'transfer' then  t.amount
+    when t.dest_credit_card_id = $1 and t.type = 'transfer' then -t.amount
+    else 0
+  end
+`;
+
+const LEDGER_COLS = `
+  id, txn_date::text as txn_date, type, amount,
+  account_id, credit_card_id, dest_account_id, dest_credit_card_id,
+  bucket_id, category_id, event_id,
+  merchant, note, reviewed, import_batch_id, external_ref,
+  created_at::text as created_at, updated_at::text as updated_at,
+  balance_after::text as balance_after,
+  delta::text as delta
+`;
+
+/**
+ * A statement-style ledger: every row carries the balance *after* it.
+ *
+ * The running total is a window function over the account's whole history,
+ * computed before LIMIT/OFFSET — so page 5 is as correct as page 1. Rows are
+ * returned newest first for display, which is the opposite of the order the
+ * balance accumulates in; the window's own ORDER BY handles that.
+ *
+ * (txn_date, created_at, id) is the accumulation order. The id tiebreak keeps
+ * it deterministic when a bulk import gives many rows the same timestamp.
+ */
+async function getLedger(
+  kind: "account" | "card",
+  id: string,
+  opening: number,
+  page: number,
+  pageSize: number,
+  ref: RefData
+): Promise<TxnPage> {
+  const sql = db();
+  const isCard = kind === "card";
+  const delta = isCard ? CARD_DELTA : ACCOUNT_DELTA;
+  const scope = isCard
+    ? "t.credit_card_id = $1 or t.dest_credit_card_id = $1"
+    : "t.account_id = $1 or t.dest_account_id = $1";
+
+  const [rows, counted] = await sql.transaction([
+    sql.query(
+      `with ledger as (
+         select t.id, t.txn_date, t.created_at, t.updated_at, t.type, t.amount,
+                t.account_id, t.credit_card_id, t.dest_account_id, t.dest_credit_card_id,
+                t.bucket_id, t.category_id, t.event_id,
+                t.merchant, t.note, t.reviewed, t.import_batch_id, t.external_ref,
+                ${delta} as delta,
+                $2::numeric + sum(${delta}) over (
+                  order by t.txn_date, t.created_at, t.id
+                  rows between unbounded preceding and current row
+                ) as balance_after
+         from transactions t
+         where ${scope}
+       )
+       select ${LEDGER_COLS} from ledger
+       order by txn_date desc, created_at desc, id desc
+       limit $3 offset $4`,
+      [id, opening, pageSize, (page - 1) * pageSize]
+    ),
+    sql.query(
+      `select count(*)::text as total from transactions t where ${scope}`,
+      [id]
+    ),
+  ]);
+
+  const raw = rows as unknown as (Transaction & { balance_after: string; delta: string })[];
+
+  return {
+    rows: decorate(raw, ref).map((r, i) => ({
+      ...r,
+      balance_after: toNumber(raw[i].balance_after),
+      delta: toNumber(raw[i].delta),
+    })),
+    total: toNumber((counted as { total: string }[])[0]?.total),
+    page,
+    pageSize,
+  };
+}
+
+export function getAccountLedger(
+  id: string,
+  opening: number,
+  page: number,
+  pageSize: number,
+  ref: RefData
+): Promise<TxnPage> {
+  return getLedger("account", id, opening, page, pageSize, ref);
+}
+
+export function getCardLedger(
+  id: string,
+  opening: number,
+  page: number,
+  pageSize: number,
+  ref: RefData
+): Promise<TxnPage> {
+  return getLedger("card", id, opening, page, pageSize, ref);
+}
+
+// ------------------------------------------------------------------
 // Dashboard
 // ------------------------------------------------------------------
 

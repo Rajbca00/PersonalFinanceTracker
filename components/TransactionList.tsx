@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { bulkApply, deleteTransaction, patchTransaction, type BulkAction } from "@/lib/actions";
 import { convertToTransfer, unlinkTransfer } from "@/lib/transfer-actions";
 import { ConvertToTransfer } from "./ConvertToTransfer";
-import { formatDayShort, formatINR } from "@/lib/format";
+import { formatDateFull, formatDayShort, formatINR, formatSigned } from "@/lib/format";
 import type { RefData, TransactionRow, TxnType } from "@/lib/types";
 import { ConfirmDialog, Sheet } from "./Sheet";
 import { TransactionForm } from "./TransactionForm";
@@ -25,9 +25,46 @@ interface Props {
   /** Dashboard preview: no checkboxes, no bulk bar. */
   compact?: boolean;
   emptyAction?: React.ReactNode;
+  /**
+   * Ledger view: show each row's running balance and group rows by date.
+   * "card" inverts the good/bad colouring, because there a rising figure is
+   * debt going up, not money arriving.
+   */
+  ledger?: "account" | "card";
 }
 
-export function TransactionList({ rows, refData, compact, emptyAction }: Props) {
+/**
+ * On an account a positive movement is money arriving; on a card it is debt
+ * growing. The sign always tracks the running figure, so the arithmetic reads
+ * correctly down the column — only the colour flips.
+ */
+function movementColor(value: number, kind: "account" | "card"): string {
+  if (value === 0) return "var(--text-muted)";
+  const bad = kind === "card" ? value > 0 : value < 0;
+  return bad ? "var(--expense)" : "var(--income)";
+}
+
+/**
+ * Splits rows into per-date groups. Rows arrive newest first, and within one
+ * date the newest is also first — so that first row already carries the day's
+ * closing balance. The day's net is the sum of each row's effect on this
+ * account, which SQL supplies, rather than being re-derived here.
+ */
+function groupByDate(rows: TransactionRow[]) {
+  const groups: { date: string; rows: TransactionRow[]; closing?: number; net: number }[] = [];
+  for (const r of rows) {
+    let g = groups[groups.length - 1];
+    if (!g || g.date !== r.txn_date) {
+      g = { date: r.txn_date, rows: [], closing: r.balance_after, net: 0 };
+      groups.push(g);
+    }
+    g.rows.push(r);
+    g.net += r.delta ?? 0;
+  }
+  return groups;
+}
+
+export function TransactionList({ rows, refData, compact, emptyAction, ledger }: Props) {
   const router = useRouter();
   const [local, setLocal] = useState(rows);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -70,6 +107,13 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
 
   const allSelected = local.length > 0 && selected.size === local.length;
 
+  // One pseudo-group when not a ledger, so the render path stays single.
+  const groups = ledger
+    ? groupByDate(local)
+    : [{ date: "", rows: local, closing: undefined, net: 0 }];
+  // Columns to the left of Balance, for the day header's spanning cell.
+  const leadCols = (compact ? 0 : 1) + 8;
+
   if (local.length === 0) {
     return (
       <EmptyState
@@ -107,11 +151,42 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
               <Th className="w-[110px]">Event</Th>
               <Th className="w-[110px] text-right">Amount</Th>
               <Th className="w-[170px]">Note</Th>
+              {ledger && <Th className="w-[120px] text-right">Balance</Th>}
               <th className="w-[72px]" />
             </tr>
           </thead>
           <tbody>
-            {local.map((r) => (
+            {groups.map((g) => (
+              <Fragment key={g.date || "all"}>
+                {ledger && (
+                  <tr style={{ background: "var(--surface-2)" }}>
+                    <td
+                      colSpan={leadCols}
+                      className="px-3 py-2 text-[12px] font-semibold"
+                      style={{ borderTop: "1px solid var(--border-strong)" }}
+                    >
+                      {formatDateFull(g.date)}
+                      <span
+                        className="ml-2 tnum font-medium"
+                        style={{ color: movementColor(g.net, ledger ?? "account") }}
+                      >
+                        {formatSigned(g.net)}
+                      </span>
+                      <span className="ml-1 font-normal" style={{ color: "var(--text-subtle)" }}>
+                        on the day
+                      </span>
+                    </td>
+                    <td
+                      className="px-3 py-2 text-right tnum text-[12px] font-semibold whitespace-nowrap"
+                      style={{ borderTop: "1px solid var(--border-strong)" }}
+                      title="Balance at the end of this day"
+                    >
+                      {g.closing === undefined ? "" : formatINR(g.closing)}
+                    </td>
+                    <td style={{ borderTop: "1px solid var(--border-strong)" }} />
+                  </tr>
+                )}
+                {g.rows.map((r) => (
               <tr
                 key={r.id}
                 style={{
@@ -210,7 +285,7 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
                 </td>
 
                 <td className="px-3 py-2 text-right tnum font-semibold whitespace-nowrap">
-                  <Amount row={r} />
+                  <Amount row={r} ledger={ledger} />
                 </td>
 
                 {/* The note is the field that changes most, so it edits in place. */}
@@ -221,6 +296,15 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
                     onSave={(v) => save(r, { note: v || null }, { note: v || null })}
                   />
                 </td>
+
+                {ledger && (
+                  <td
+                    className="px-3 py-2 text-right tnum whitespace-nowrap"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {r.balance_after === undefined ? "—" : formatINR(r.balance_after)}
+                  </td>
+                )}
 
                 <td className="px-2 py-1.5">
                   <div className="flex items-center justify-end gap-0.5">
@@ -263,6 +347,8 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
                   </div>
                 </td>
               </tr>
+                ))}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -270,7 +356,35 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
 
       {/* ============================= mobile cards ============================ */}
       <ul className="md:hidden list-none p-0 m-0">
-        {local.map((r) => (
+        {groups.map((g) => (
+          <Fragment key={g.date || "all"}>
+            {ledger && (
+              <li
+                className="flex items-baseline justify-between gap-3 px-4 py-2"
+                style={{
+                  background: "var(--surface-2)",
+                  borderTop: "1px solid var(--border-strong)",
+                  borderBottom: "1px solid var(--border)",
+                  position: "sticky",
+                  top: 56,
+                  zIndex: 1,
+                }}
+              >
+                <span className="text-[12px] font-semibold">
+                  {formatDateFull(g.date)}
+                  <span
+                    className="ml-2 tnum font-medium"
+                    style={{ color: movementColor(g.net, ledger ?? "account") }}
+                  >
+                    {formatSigned(g.net)}
+                  </span>
+                </span>
+                <span className="text-[12px] tnum font-semibold whitespace-nowrap">
+                  {g.closing === undefined ? "" : formatINR(g.closing)}
+                </span>
+              </li>
+            )}
+            {g.rows.map((r) => (
           <li
             key={r.id}
             style={{
@@ -302,7 +416,7 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
                     </span>
                   </span>
                   <span className="text-[14px] font-semibold tnum whitespace-nowrap">
-                    <Amount row={r} />
+                    <Amount row={r} ledger={ledger} />
                   </span>
                 </div>
 
@@ -331,6 +445,8 @@ export function TransactionList({ rows, refData, compact, emptyAction }: Props) 
               />
             </div>
           </li>
+            ))}
+          </Fragment>
         ))}
       </ul>
 
@@ -476,7 +592,25 @@ function TypeMark({ type }: { type: TxnType }) {
   );
 }
 
-function Amount({ row }: { row: TransactionRow }) {
+function Amount({
+  row,
+  ledger,
+}: {
+  row: TransactionRow;
+  ledger?: "account" | "card";
+}) {
+  // In a ledger the amount has to agree with the balance beside it, so it is
+  // read from THIS account's point of view: a transfer out is money out, even
+  // though a transfer is neither income nor expense overall.
+  if (ledger && row.delta !== undefined) {
+    return (
+      <span style={{ color: movementColor(row.delta, ledger) }}>
+        {row.delta < 0 ? "−" : "+"}
+        {formatINR(Math.abs(row.delta))}
+      </span>
+    );
+  }
+
   const color =
     row.type === "income"
       ? "var(--income)"

@@ -92,6 +92,10 @@ export interface TransactionRow extends Transaction {
   bucket_name: string;
   category_name: string | null;
   event_name: string | null;
+  /** Ledger views only: this account's balance after this transaction. */
+  balance_after?: number;
+  /** Ledger views only: signed effect on this account (+in / −out). */
+  delta?: number;
 }
 
 /** Everything the pickers need, loaded once per page. */
